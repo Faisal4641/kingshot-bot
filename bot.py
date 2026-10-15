@@ -10,18 +10,13 @@ from datetime import datetime
 # ─────────────────────────────────────────────
 #  ONLY THIS ONE LINE TO EDIT BEFORE RUNNING
 # ─────────────────────────────────────────────
-BOT_TOKEN = os.getenv("DISCORD_TOKEN")    # paste your token here
-CHECK_INTERVAL = 30                          # minutes between checks
+BOT_TOKEN      = os.getenv("DISCORD_TOKEN")
+CHECK_INTERVAL = 30  # minutes between checks
 
-# ─────────────────────────────────────────────
-#  Files (auto-created, don't touch)
 # ─────────────────────────────────────────────
 CODES_FILE    = "known_codes.json"
-SETTINGS_FILE = "server_settings.json"      # stores each server's channel
+SETTINGS_FILE = "server_settings.json"
 
-# ─────────────────────────────────────────────
-#  Scrape sources
-# ─────────────────────────────────────────────
 SOURCES = [
     {
         "name": "Kingshot Official",
@@ -37,7 +32,6 @@ SOURCES = [
 
 REDEEM_URL = "https://kingshot.me/gift-code"
 
-# ─────────────────────────────────────────────
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
 
@@ -46,7 +40,7 @@ intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 
-# ── settings helpers (per-server channel storage) ─────
+# ── settings helpers ──────────────────────────
 
 def load_settings() -> dict:
     if os.path.exists(SETTINGS_FILE):
@@ -59,8 +53,7 @@ def save_settings(settings: dict):
         json.dump(settings, f, indent=2)
 
 def get_channel_id(guild_id: int):
-    settings = load_settings()
-    return settings.get(str(guild_id))
+    return load_settings().get(str(guild_id))
 
 def set_channel_id(guild_id: int, channel_id: int):
     settings = load_settings()
@@ -68,7 +61,7 @@ def set_channel_id(guild_id: int, channel_id: int):
     save_settings(settings)
 
 
-# ── codes helpers ──────────────────────────────
+# ── codes helpers ─────────────────────────────
 
 def load_known_codes() -> set:
     if os.path.exists(CODES_FILE):
@@ -113,7 +106,7 @@ async def scrape_all_codes() -> set:
             all_codes |= await fetch_codes_from_source(session, src)
     return all_codes
 
-def build_embed(new_codes: list) -> discord.Embed:
+def build_alert_embed(new_codes: list) -> discord.Embed:
     embed = discord.Embed(
         title="🎁 New Kingshot Gift Code(s) Found!",
         description="\n".join(f"```{c}```" for c in new_codes),
@@ -124,6 +117,37 @@ def build_embed(new_codes: list) -> discord.Embed:
     embed.set_footer(text="Kingshot Code Bot • Auto Alert")
     return embed
 
+def build_active_embed(codes: list) -> discord.Embed:
+    """Embed showing ALL currently known active codes"""
+    if codes:
+        desc = "\n".join(f"```{c}```" for c in codes)
+    else:
+        desc = "❌ No active codes found right now.\nCheck back soon!"
+    embed = discord.Embed(
+        title="🎮 Kingshot — Currently Active Codes",
+        description=desc,
+        color=0x00FF99,
+        timestamp=datetime.utcnow(),
+    )
+    embed.add_field(
+        name="How to redeem 👇",
+        value=f"[Tap here to redeem on official site]({REDEEM_URL})",
+        inline=False
+    )
+    embed.add_field(
+        name="📌 Steps to redeem:",
+        value=(
+            "1️⃣ Open Kingshot game\n"
+            "2️⃣ Tap your **Avatar** (top left)\n"
+            "3️⃣ Tap **Gift Code**\n"
+            "4️⃣ Enter the code above\n"
+            "5️⃣ Tap **Confirm** to claim rewards!"
+        ),
+        inline=False
+    )
+    embed.set_footer(text=f"Total codes: {len(codes)} • Kingshot Code Bot")
+    return embed
+
 
 # ── auto check task ────────────────────────────
 
@@ -131,7 +155,7 @@ def build_embed(new_codes: list) -> discord.Embed:
 async def check_codes():
     settings = load_settings()
     if not settings:
-        return  # no servers configured yet
+        return
 
     known = load_known_codes()
     found = await scrape_all_codes()
@@ -141,10 +165,9 @@ async def check_codes():
         log.info("No new codes found.")
         return
 
-    log.info(f"New codes found: {new_codes}")
-    embed = build_embed(new_codes)
+    log.info(f"New codes: {new_codes}")
+    embed = build_alert_embed(new_codes)
 
-    # post to every configured server
     for guild_id, channel_id in settings.items():
         channel = bot.get_channel(int(channel_id))
         if channel:
@@ -170,18 +193,16 @@ async def before_check():
 async def on_ready():
     log.info(f"Logged in as {bot.user}")
     check_codes.start()
-    print(f"✅ Kingshot Code Bot online! Checking every {CHECK_INTERVAL} min.")
+    print(f"✅ Kingshot Code Bot online!")
 
 @bot.event
 async def on_guild_join(guild):
-    # welcome message when bot joins a new server
     for channel in guild.text_channels:
         if channel.permissions_for(guild.me).send_messages:
             await channel.send(
                 "👋 **Kingshot Codes Bot is here!**\n\n"
-                "To set up alerts, an admin must type:\n"
-                "➡️ `!setup #channel-name`\n\n"
-                "Example: `!setup #kingshot-codes`"
+                "Admin setup: `!setup #channel-name`\n"
+                "See active codes: `!codes`"
             )
             break
 
@@ -191,9 +212,8 @@ async def on_guild_join(guild):
 @bot.command(name="setup")
 @commands.has_permissions(administrator=True)
 async def setup(ctx, channel: discord.TextChannel = None):
-    """Admin sets which channel gets code alerts — !setup #channel"""
     if channel is None:
-        await ctx.send("❌ Please mention a channel! Example: `!setup #kingshot-codes`")
+        await ctx.send("❌ Example: `!setup #kingshot-codes`")
         return
     set_channel_id(ctx.guild.id, channel.id)
     await ctx.send(
@@ -201,23 +221,38 @@ async def setup(ctx, channel: discord.TextChannel = None):
         f"I'll check for new codes every **{CHECK_INTERVAL} minutes** automatically!"
     )
 
+@bot.command(name="codes")
+async def active_codes(ctx):
+    """Show all currently active Kingshot codes right now"""
+    msg = await ctx.send("🔍 Fetching current active codes, please wait...")
+    found = await scrape_all_codes()
+    known = load_known_codes()
+
+    # merge scraped + previously known codes
+    all_codes = sorted(found | known)
+
+    # save any newly found ones
+    if found - known:
+        save_known_codes(known | found)
+
+    embed = build_active_embed(all_codes)
+    await msg.edit(content=None, embed=embed)
+
 @bot.command(name="checknow")
 @commands.has_permissions(administrator=True)
 async def check_now(ctx):
-    """Admin: force an immediate check right now"""
     channel_id = get_channel_id(ctx.guild.id)
     if not channel_id:
-        await ctx.send("❌ Not set up yet! Use `!setup #channel` first.")
+        await ctx.send("❌ Use `!setup #channel` first.")
         return
     await ctx.send("🔍 Checking for new codes right now…")
     await check_codes()
 
 @bot.command(name="listcodes")
 async def list_codes(ctx):
-    """Show all codes the bot has already posted"""
     known = load_known_codes()
     if not known:
-        await ctx.send("No codes recorded yet.")
+        await ctx.send("No codes recorded yet. Try `!codes` to fetch live!")
         return
     codes_str = "\n".join(f"• `{c}`" for c in sorted(known))
     await ctx.send(f"**Known Kingshot codes:**\n{codes_str}")
@@ -225,19 +260,26 @@ async def list_codes(ctx):
 @bot.command(name="clearknown")
 @commands.has_permissions(administrator=True)
 async def clear_known(ctx):
-    """Admin: reset the known-codes list"""
     save_known_codes(set())
-    await ctx.send("✅ Known codes cleared. Bot will re-alert on next check.")
+    await ctx.send("✅ Known codes cleared.")
 
 @bot.command(name="status")
 async def status(ctx):
-    """Check if bot is set up in this server"""
     channel_id = get_channel_id(ctx.guild.id)
     if channel_id:
         channel = bot.get_channel(int(channel_id))
-        await ctx.send(f"✅ Bot is active! Posting alerts in {channel.mention if channel else 'unknown channel'}")
+        await ctx.send(f"✅ Active! Posting alerts in {channel.mention if channel else 'unknown'}")
     else:
-        await ctx.send("⚠️ Bot not set up yet. Admin must type `!setup #channel`")
+        await ctx.send("⚠️ Not set up yet. Admin: `!setup #channel`")
+
+@bot.command(name="help2")
+async def help2(ctx):
+    embed = discord.Embed(title="🤖 Kingshot Bot Commands", color=0x7289DA)
+    embed.add_field(name="!codes", value="Show all currently active codes", inline=False)
+    embed.add_field(name="!setup #channel", value="[Admin] Set alert channel", inline=False)
+    embed.add_field(name="!checknow", value="[Admin] Force check right now", inline=False)
+    embed.add_field(name="!listcodes", value="Show previously found codes", inline=False)
+    embed.add_field(name="!status", value="Check bot setup status", inline=False)
+    await ctx.send(embed=embed)
 
 bot.run(BOT_TOKEN)
-  
