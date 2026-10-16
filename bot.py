@@ -575,4 +575,30 @@ async def setup(ctx, channel: discord.TextChannel = None):
 
 @bot.command(name="checknow")
 @commands.has_permissions(administrator=True)
-async def
+async def status(ctx):
+    server_data = get_server(ctx.guild.id)
+    channel_id = server_data.get("channel_id")
+    last_reminder = server_data.get("last_reminder", "Never")
+    known = load_known_codes()
+    embed = discord.Embed(title="🤖 Kingshot Bot Status", color=BOT_COLOR_BLUE,
+                          timestamp=datetime.now(timezone.utc))
+    if channel_id:
+        ch = ctx.guild.get_channel(int(channel_id))
+        embed.add_field(name="📢 Alert Channel", value=ch.mention if ch else "Not found", inline=True)
+    else:
+        embed.add_field(name="📢 Alert Channel", value="Auto (#kingshot-codes)", inline=True)
+    embed.add_field(name="🔍 Check Every", value=f"{CHECK_INTERVAL} minutes", inline=True)
+    embed.add_field(name="⏰ Reminder Every", value=f"{ALERT_INTERVAL_H} hours", inline=True)
+    embed.add_field(name="🎮 Active Codes", value=str(len(known)), inline=True)
+    embed.add_field(name="📅 Last Reminder", value=last_reminder[:16] if last_reminder != "Never" else "Never", inline=True)
+    embed.set_footer(text=footer())
+    await ctx.send(embed=embed)
+ 
+@bot.command(name="clearknown")
+@commands.has_permissions(administrator=True)
+async def clear_known(ctx):
+    save_known_codes(set())
+    save_codes_time({})
+    await ctx.send("✅ Known codes and timestamps cleared.")
+ 
+bot.run(BOT_TOKEN)
