@@ -5,33 +5,31 @@ from bs4 import BeautifulSoup
 import json
 import os
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timezone, timedelta
+import random
 
 # ─────────────────────────────────────────────
-BOT_TOKEN         = os.getenv("DISCORD_TOKEN")
-CHECK_INTERVAL    = 5       # check every 5 minutes for NEW codes
-ALERT_INTERVAL_H  = 12      # repeat known codes alert every 12 hours
-OWNER_NAME        = "DEADPOOL"
-OWNER_USERNAME    = "faysal4641"
-REDEEM_URL        = "https://kingshot.me/gift-code"
-BOT_COLOR         = 0xFFD700   # gold
-BOT_COLOR_GREEN   = 0x00FF99
-BOT_COLOR_BLUE    = 0x7289DA
+BOT_TOKEN        = os.getenv("DISCORD_TOKEN")
+CHECK_INTERVAL   = 5       # check every 5 minutes
+ALERT_INTERVAL_H = 12      # reminder every 12 hours
+OWNER_NAME       = "DEADPOOL"
+OWNER_USERNAME   = "faysal4641"
+REDEEM_URL       = "https://kingshot.me/gift-code"
+BOT_COLOR        = 0xFFD700
+BOT_COLOR_GREEN  = 0x2ECC71
+BOT_COLOR_BLUE   = 0x3498DB
+BOT_COLOR_RED    = 0xE74C3C
 # ─────────────────────────────────────────────
 
-CODES_FILE    = "known_codes.json"
-SETTINGS_FILE = "server_settings.json"
+CODES_FILE       = "known_codes.json"
+CODES_TIME_FILE  = "codes_time.json"
+SETTINGS_FILE    = "server_settings.json"
 
 SOURCES = [
     {
         "name": "Pocket Tactics",
         "url": "https://www.pockettactics.com/kingshot/codes",
         "selector": "code, strong, li strong, p strong",
-    },
-    {
-        "name": "UCN.gg",
-        "url": "https://ucn.gg/kingshot-gift-codes",
-        "selector": "code, .code, span[class*='code'], td, li",
     },
     {
         "name": "Kingshot Official",
@@ -81,6 +79,41 @@ def save_known_codes(codes: set):
     with open(CODES_FILE, "w") as f:
         json.dump(list(codes), f, indent=2)
 
+def load_codes_time() -> dict:
+    if os.path.exists(CODES_TIME_FILE):
+        with open(CODES_TIME_FILE) as f:
+            return json.load(f)
+    return {}
+
+def save_codes_time(data: dict):
+    with open(CODES_TIME_FILE, "w") as f:
+        json.dump(data, f, indent=2)
+
+def record_code_time(codes: set):
+    times = load_codes_time()
+    now = datetime.now(timezone.utc).isoformat()
+    for c in codes:
+        if c not in times:
+            times[c] = now
+    save_codes_time(times)
+
+def get_code_age(code: str) -> str:
+    times = load_codes_time()
+    if code not in times:
+        return "recently"
+    found_at = datetime.fromisoformat(times[code])
+    if found_at.tzinfo is None:
+        found_at = found_at.replace(tzinfo=timezone.utc)
+    diff = datetime.now(timezone.utc) - found_at
+    mins = int(diff.total_seconds() / 60)
+    if mins < 60:
+        return f"{mins}m ago" if mins > 1 else "just now"
+    hours = mins // 60
+    if hours < 24:
+        return f"{hours}h ago"
+    days = hours // 24
+    return f"{days}d ago"
+
 SKIP_WORDS = {
     "kingshot", "kingshot2", "download", "redeem", "click", "here",
     "code", "codes", "gift", "free", "expired", "active", "working",
@@ -98,7 +131,6 @@ def looks_like_code(text: str) -> bool:
         return False
     if t.lower() in SKIP_WORDS:
         return False
-    # must have at least some digits OR be all caps with letters+digits
     has_digit = any(c.isdigit() for c in t)
     has_letter = any(c.isalpha() for c in t)
     return has_digit and has_letter
@@ -132,114 +164,133 @@ async def scrape_all_codes() -> set:
 
 # ── embeds ────────────────────────────────────
 
-OWNER_DISCORD_ID = "YOUR_DISCORD_ID"   # paste your Discord user ID here
-
-def footer_text():
+def footer():
     return f"Powered by {OWNER_NAME} • {OWNER_USERNAME}"
 
-def owner_credit():
-    return f"Powered by [{OWNER_NAME}](https://discord.com/users/{OWNER_DISCORD_ID}) • {OWNER_USERNAME}"
+def format_codes_list(codes: list) -> str:
+    """Each code on its own line in a copyable inline code block with age"""
+    lines = []
+    for c in codes:
+        age = get_code_age(c)
+        lines.append(f"`{c}`  —  ⏱ {age}")
+    return "\n\n".join(lines)
 
-def build_new_code_embed(new_codes: list) -> discord.Embed:
-    embed = discord.Embed(
-        title="🚨 NEW Kingshot Gift Code(s) Alert!",
-        description="\n".join(f"```{c}```" for c in new_codes),
-        color=BOT_COLOR,
-        timestamp=datetime.utcnow(),
-    )
+def build_codes_embed(codes: list, username: str = None) -> discord.Embed:
+    greeting = f"Hey **{username}**! 👋\n\n" if username else ""
+
+    if codes:
+        count = len(codes)
+        desc = (
+            f"{greeting}"
+            f"🎮 Currently **{count} active code{'s' if count > 1 else ''}** for Kingshot:\n\n"
+            f"━━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"{format_codes_list(codes)}\n\n"
+            f"━━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"💡 *Tap any code to select it, then copy!*"
+        )
+        title = f"🎁 Kingshot Active Codes ({count} found)"
+        color = BOT_COLOR_GREEN
+    else:
+        desc = (
+            f"{greeting}"
+            f"😔 No active codes found right now.\n\n"
+            f"━━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"🔍 I check every **5 minutes** automatically!\n"
+            f"🔔 You'll get pinged the moment a new code drops."
+        )
+        title = "🎮 Kingshot Active Codes"
+        color = BOT_COLOR_RED
+
+    embed = discord.Embed(title=title, description=desc, color=color,
+                          timestamp=datetime.now(timezone.utc))
     embed.add_field(
         name="📌 How to redeem:",
         value=(
-            "1️⃣ Open **Kingshot** game\n"
-            "2️⃣ Tap **Avatar** → **Gift Code**\n"
-            "3️⃣ Enter code → **Confirm**\n"
-            f"4️⃣ Or [redeem on website]({REDEEM_URL})"
+            "**1.** Open **Kingshot** game\n"
+            "**2.** Tap your **Avatar** (top-left)\n"
+            "**3.** Tap **Gift Code**\n"
+            "**4.** Paste code → tap **Confirm** ✅\n"
+            f"**5.** Or [redeem on official website]({REDEEM_URL})"
         ),
         inline=False
     )
-    embed.set_footer(text=footer_text())
+    embed.set_footer(text=footer())
     return embed
 
-def build_all_codes_embed(codes: list) -> discord.Embed:
-    if codes:
-        # show code in ` ` for easy tap-to-copy on mobile
-        desc = "\n".join(f"📌 `{c}`" for c in codes)
-        desc += "\n\n💡 **Tap a code above to copy it!**"
-        title = f"🎮 Kingshot Active Codes ({len(codes)} found)"
-    else:
-        desc = "❌ No active codes found right now.\nCheck back soon — bot checks every 5 minutes!"
-        title = "🎮 Kingshot Active Codes"
-
-    embed = discord.Embed(title=title, description=desc, color=BOT_COLOR_GREEN, timestamp=datetime.utcnow())
+def build_new_code_embed(new_codes: list) -> discord.Embed:
+    desc = (
+        f"🆕 **{len(new_codes)} new code{'s' if len(new_codes) > 1 else ''} just dropped!**\n\n"
+        f"━━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"{format_codes_list(new_codes)}\n\n"
+        f"━━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"💡 *Tap any code to select it, then copy!*"
+    )
+    embed = discord.Embed(
+        title="🚨 New Kingshot Gift Code Alert!",
+        description=desc,
+        color=BOT_COLOR,
+        timestamp=datetime.now(timezone.utc)
+    )
     embed.add_field(
         name="📌 How to redeem:",
         value=(
-            "1️⃣ Open **Kingshot** game\n"
-            "2️⃣ Tap **Avatar** → **Gift Code**\n"
-            "3️⃣ Enter code → **Confirm**\n"
-            f"4️⃣ Or [redeem on website]({REDEEM_URL})"
+            "**1.** Open **Kingshot** game\n"
+            "**2.** Tap your **Avatar** (top-left)\n"
+            "**3.** Tap **Gift Code**\n"
+            "**4.** Paste code → tap **Confirm** ✅\n"
+            f"**5.** Or [redeem on official website]({REDEEM_URL})"
         ),
         inline=False
     )
-    embed.add_field(name="🎖️ Credit", value=owner_credit(), inline=False)
-    embed.set_footer(text=footer_text())
+    embed.set_footer(text=footer())
     return embed
 
 def build_welcome_embed(guild_name: str, channel: discord.TextChannel) -> discord.Embed:
     embed = discord.Embed(
-        title=f"👋 Kingshot Codes Bot has joined {guild_name}!",
+        title=f"👋 Kingshot Codes Bot has arrived in {guild_name}!",
         description=(
-            "I will **automatically** post new Kingshot gift codes in "
-            f"{channel.mention} and ping **@everyone**!\n\n"
-            "No setup needed — I'm already watching for codes! 🎉"
+            f"Hey everyone! I'll automatically post Kingshot gift codes\n"
+            f"in {channel.mention} and ping **@everyone** instantly! 🎉\n\n"
+            f"━━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"**Just type any of these to get codes:**\n"
+            f"`code` • `codes` • `!codes` • `any codes?`\n\n"
+            f"**Other commands:**\n"
+            f"`hi` — Say hello to the bot\n"
+            f"`help` — See all commands\n"
+            f"`!status` — Check bot status\n\n"
+            f"━━━━━━━━━━━━━━━━━━━━━"
         ),
         color=BOT_COLOR_BLUE,
-        timestamp=datetime.utcnow(),
-    )
-    embed.add_field(
-        name="💬 Commands (type anywhere):",
-        value=(
-            "`!codes` or just type `codes` → See all active codes\n"
-            "`!status` → Check bot status\n"
-            "`!setup #channel` → [Admin] Change alert channel\n"
-            "`!checknow` → [Admin] Force check now\n"
-            "`!help2` → Full command list"
-        ),
-        inline=False
+        timestamp=datetime.now(timezone.utc)
     )
     embed.add_field(
         name="⚙️ How it works:",
         value=(
             "✅ Checks for new codes every **5 minutes**\n"
-            "✅ Alerts **@everyone** instantly for NEW codes\n"
-            "✅ Posts reminder of all codes every **12 hours**\n"
+            "✅ **Instant @everyone alert** for new codes\n"
+            "✅ **Reminder** every 12 hours\n"
+            "✅ Shows **how long ago** each code was found\n"
             "✅ Runs **24/7** automatically"
         ),
         inline=False
     )
-    embed.set_footer(text=footer_text())
+    embed.set_footer(text=footer())
     return embed
 
 
-# ── auto-create channel ───────────────────────
+# ── auto channel ──────────────────────────────
 
 async def get_or_create_codes_channel(guild: discord.Guild) -> discord.TextChannel:
-    """Find existing kingshot channel or create one automatically"""
-    # check if already set in settings
     server_data = get_server(guild.id)
     if "channel_id" in server_data:
         ch = guild.get_channel(int(server_data["channel_id"]))
         if ch:
             return ch
-
-    # look for existing channel with kingshot in name
     for ch in guild.text_channels:
         if "kingshot" in ch.name.lower() or "codes" in ch.name.lower():
             server_data["channel_id"] = ch.id
             save_server(guild.id, server_data)
             return ch
-
-    # create new channel automatically
     try:
         overwrites = {
             guild.default_role: discord.PermissionOverwrite(send_messages=False, read_messages=True),
@@ -248,15 +299,13 @@ async def get_or_create_codes_channel(guild: discord.Guild) -> discord.TextChann
         ch = await guild.create_text_channel(
             "kingshot-codes",
             overwrites=overwrites,
-            topic="🎮 Auto Kingshot gift code alerts • Powered by " + footer_text()
+            topic=f"🎮 Auto Kingshot gift code alerts • {footer()}"
         )
         server_data["channel_id"] = ch.id
         save_server(guild.id, server_data)
-        log.info(f"Created #kingshot-codes in {guild.name}")
         return ch
     except Exception as e:
-        log.error(f"Could not create channel in {guild.name}: {e}")
-        # fallback to first available channel
+        log.error(f"Could not create channel: {e}")
         for ch in guild.text_channels:
             if ch.permissions_for(guild.me).send_messages:
                 server_data["channel_id"] = ch.id
@@ -272,16 +321,16 @@ async def check_codes():
     known = load_known_codes()
     found = await scrape_all_codes()
     new_codes = sorted(found - known)
-
-    # check which servers need 12-hour reminder
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     settings = load_settings()
+
+    if new_codes:
+        record_code_time(set(new_codes))
 
     for guild_id, server_data in settings.items():
         guild = bot.get_guild(int(guild_id))
         if not guild:
             continue
-
         channel_id = server_data.get("channel_id")
         channel = guild.get_channel(int(channel_id)) if channel_id else None
         if not channel:
@@ -289,7 +338,6 @@ async def check_codes():
         if not channel:
             continue
 
-        # send NEW code alert immediately
         if new_codes:
             try:
                 embed = build_new_code_embed(new_codes)
@@ -297,33 +345,27 @@ async def check_codes():
                     content="@everyone 🚨 **New Kingshot gift codes just dropped!**",
                     embed=embed
                 )
-                log.info(f"Sent new codes to {guild.name}")
             except Exception as e:
                 log.error(f"Error sending to {guild.name}: {e}")
 
-        # send 12-hour reminder of all codes
         last_reminder = server_data.get("last_reminder")
-        should_remind = False
-        if not last_reminder:
-            should_remind = True
-        else:
-            last_dt = datetime.fromisoformat(last_reminder)
-            if now - last_dt >= timedelta(hours=ALERT_INTERVAL_H):
-                should_remind = True
+        should_remind = not last_reminder or (
+            now - datetime.fromisoformat(last_reminder).replace(tzinfo=timezone.utc)
+            >= timedelta(hours=ALERT_INTERVAL_H)
+        )
 
         if should_remind and (found | known):
             all_codes = sorted(found | known)
             try:
-                embed = build_all_codes_embed(all_codes)
+                embed = build_codes_embed(all_codes)
                 await channel.send(
                     content="@everyone ⏰ **Kingshot codes reminder!**",
                     embed=embed
                 )
                 server_data["last_reminder"] = now.isoformat()
                 save_server(int(guild_id), server_data)
-                log.info(f"Sent 12h reminder to {guild.name}")
             except Exception as e:
-                log.error(f"Error sending reminder to {guild.name}: {e}")
+                log.error(f"Error sending reminder: {e}")
 
     if new_codes:
         known |= set(new_codes)
@@ -346,45 +388,137 @@ async def on_ready():
         )
     )
     check_codes.start()
-    print(f"✅ Kingshot Code Bot online! Powered by {OWNER_NAME} • {OWNER_USERNAME}")
+    print(f"✅ Kingshot Code Bot online! {footer()}")
 
 @bot.event
 async def on_guild_join(guild: discord.Guild):
-    """Auto setup when bot joins a new server"""
     channel = await get_or_create_codes_channel(guild)
     if channel:
         embed = build_welcome_embed(guild.name, channel)
         await channel.send(embed=embed)
-        log.info(f"Joined and set up in {guild.name}")
 
 @bot.event
 async def on_message(message: discord.Message):
-    """Allow users to just type 'codes' or 'code' without ! prefix"""
     if message.author.bot:
         return
+
     content = message.content.strip().lower()
-    # respond to natural typing: "codes", "code", "kingshot codes", "gift code"
-    triggers = ["codes", "code", "!code", "!codes", "kingshot code", "kingshot codes", "gift code", "redeem code"]
-    if content in triggers:
-        ctx = await bot.get_context(message)
-        await active_codes(ctx)
+    name = message.author.display_name
+
+    # ── code triggers ──
+    code_triggers = [
+        "code", "codes", "!code", "!codes",
+        "kingshot code", "kingshot codes",
+        "gift code", "any codes", "any codes?",
+        "show codes", "get codes", "redeem code"
+    ]
+    if content in code_triggers:
+        async with message.channel.typing():
+            found = await scrape_all_codes()
+            known = load_known_codes()
+            all_codes = sorted(found | known)
+            if found - known:
+                record_code_time(found - known)
+                save_known_codes(known | found)
+            embed = build_codes_embed(all_codes, username=name)
+            await message.channel.send(embed=embed)
         return
+
+    # ── greeting triggers ──
+    greet_triggers = ["hi", "hello", "hey", "helo", "hii", "hiii", "sup", "yo"]
+    if content in greet_triggers:
+        known = load_known_codes()
+        count = len(known)
+        responses = [
+            f"Hey **{name}**! 👋 Welcome! I'm watching Kingshot 24/7 🎮\nCurrently **{count} active code{'s' if count != 1 else ''}** — type `code` to see them!",
+            f"Hi **{name}**! 😄 Hope you're having a great day!\nType `code` to check the latest Kingshot gift codes 🎁",
+            f"Hello **{name}**! 👋 Ready to get some free rewards?\nType `code` to see **{count} active Kingshot code{'s' if count != 1 else ''}**! 🎮",
+        ]
+        await message.channel.send(random.choice(responses))
+        return
+
+    # ── thanks triggers ──
+    thanks_triggers = ["thanks", "thank you", "thx", "ty", "tysm", "thank u"]
+    if content in thanks_triggers:
+        responses = [
+            f"You're welcome **{name}**! 🎮 Happy gaming! Don't forget to redeem your codes!",
+            f"Anytime **{name}**! 😄 Good luck in Kingshot! 🎮",
+            f"No problem **{name}**! 🙌 I'll keep watching for new codes 24/7!",
+        ]
+        await message.channel.send(random.choice(responses))
+        return
+
+    # ── how many codes ──
+    count_triggers = ["how many codes", "how many codes?", "how many", "count codes"]
+    if content in count_triggers:
+        known = load_known_codes()
+        count = len(known)
+        if count == 0:
+            await message.channel.send(f"Hey **{name}**! 😔 No active codes right now. I'll alert you the moment one drops!")
+        else:
+            await message.channel.send(f"Hey **{name}**! 🎮 There are currently **{count} active code{'s' if count != 1 else ''}**! Type `code` to see them all!")
+        return
+
+    # ── help trigger ──
+    help_triggers = ["help", "!help", "commands", "?"]
+    if content in help_triggers:
+        embed = discord.Embed(
+            title="🤖 Kingshot Bot — Help",
+            description=f"Hey **{name}**! Here's everything I can do:",
+            color=BOT_COLOR_BLUE,
+            timestamp=datetime.now(timezone.utc)
+        )
+        embed.add_field(
+            name="💬 Just type these:",
+            value=(
+                "`code` or `codes` — See all active codes\n"
+                "`hi` / `hello` — Say hello!\n"
+                "`how many codes` — Quick count\n"
+                "`thanks` — You're welcome 😄\n"
+                "`help` — This menu"
+            ),
+            inline=False
+        )
+        embed.add_field(
+            name="🔧 Admin commands:",
+            value=(
+                "`!setup #channel` — Set alert channel\n"
+                "`!checknow` — Force check now\n"
+                "`!status` — Bot status\n"
+                "`!clearknown` — Reset codes list"
+            ),
+            inline=False
+        )
+        embed.add_field(
+            name="⚙️ Auto features:",
+            value=(
+                "✅ Checks every **5 minutes**\n"
+                "✅ Instant alert for new codes\n"
+                "✅ Reminder every **12 hours**\n"
+                "✅ Shows how long ago code was found"
+            ),
+            inline=False
+        )
+        embed.set_footer(text=footer())
+        await message.channel.send(embed=embed)
+        return
+
     await bot.process_commands(message)
 
 
 # ── commands ───────────────────────────────────
 
 @bot.command(name="codes")
-async def active_codes(ctx):
-    """Show all currently active Kingshot codes"""
-    msg = await ctx.send("🔍 Fetching active Kingshot codes...")
-    found = await scrape_all_codes()
-    known = load_known_codes()
-    all_codes = sorted(found | known)
-    if found - known:
-        save_known_codes(known | found)
-    embed = build_all_codes_embed(all_codes)
-    await msg.edit(content=None, embed=embed)
+async def cmd_codes(ctx):
+    async with ctx.typing():
+        found = await scrape_all_codes()
+        known = load_known_codes()
+        all_codes = sorted(found | known)
+        if found - known:
+            record_code_time(found - known)
+            save_known_codes(known | found)
+    embed = build_codes_embed(all_codes, username=ctx.author.display_name)
+    await ctx.send(embed=embed)
 
 @bot.command(name="setup")
 @commands.has_permissions(administrator=True)
@@ -395,17 +529,14 @@ async def setup(ctx, channel: discord.TextChannel = None):
     server_data = get_server(ctx.guild.id)
     server_data["channel_id"] = channel.id
     save_server(ctx.guild.id, server_data)
-    await ctx.send(
-        f"✅ Done! Alerts will post in {channel.mention}\n"
-        f"Checking every **{CHECK_INTERVAL} min**, reminders every **{ALERT_INTERVAL_H} hours**!"
-    )
+    await ctx.send(f"✅ Done! Alerts will post in {channel.mention}\nChecking every **{CHECK_INTERVAL} min**, reminders every **{ALERT_INTERVAL_H} hours**!")
 
 @bot.command(name="checknow")
 @commands.has_permissions(administrator=True)
 async def check_now(ctx):
-    await ctx.send("🔍 Force checking for new codes...")
+    await ctx.send("🔍 Checking for new codes...")
     await check_codes()
-    await ctx.send("✅ Check complete!")
+    await ctx.send("✅ Done!")
 
 @bot.command(name="status")
 async def status(ctx):
@@ -413,62 +544,25 @@ async def status(ctx):
     channel_id = server_data.get("channel_id")
     last_reminder = server_data.get("last_reminder", "Never")
     known = load_known_codes()
-    embed = discord.Embed(title="🤖 Kingshot Bot Status", color=BOT_COLOR_BLUE)
+    embed = discord.Embed(title="🤖 Kingshot Bot Status", color=BOT_COLOR_BLUE,
+                          timestamp=datetime.now(timezone.utc))
     if channel_id:
         ch = ctx.guild.get_channel(int(channel_id))
         embed.add_field(name="📢 Alert Channel", value=ch.mention if ch else "Not found", inline=True)
     else:
-        embed.add_field(name="📢 Alert Channel", value="Auto (kingshot-codes)", inline=True)
-    embed.add_field(name="🔍 Check Interval", value=f"Every {CHECK_INTERVAL} minutes", inline=True)
-    embed.add_field(name="⏰ Reminder Interval", value=f"Every {ALERT_INTERVAL_H} hours", inline=True)
-    embed.add_field(name="🎮 Known Codes", value=str(len(known)), inline=True)
+        embed.add_field(name="📢 Alert Channel", value="Auto (#kingshot-codes)", inline=True)
+    embed.add_field(name="🔍 Check Every", value=f"{CHECK_INTERVAL} minutes", inline=True)
+    embed.add_field(name="⏰ Reminder Every", value=f"{ALERT_INTERVAL_H} hours", inline=True)
+    embed.add_field(name="🎮 Active Codes", value=str(len(known)), inline=True)
     embed.add_field(name="📅 Last Reminder", value=last_reminder[:16] if last_reminder != "Never" else "Never", inline=True)
-    embed.set_footer(text=footer_text())
+    embed.set_footer(text=footer())
     await ctx.send(embed=embed)
 
 @bot.command(name="clearknown")
 @commands.has_permissions(administrator=True)
 async def clear_known(ctx):
     save_known_codes(set())
-    await ctx.send("✅ Known codes cleared.")
-
-@bot.command(name="help2")
-async def help2(ctx):
-    embed = discord.Embed(
-        title="🤖 Kingshot Bot — Command Guide",
-        color=BOT_COLOR_BLUE,
-        timestamp=datetime.utcnow()
-    )
-    embed.add_field(
-        name="👥 For Everyone:",
-        value=(
-            "`!codes` or type `codes` → Show all active codes\n"
-            "`!status` → Bot status & info\n"
-            "`!help2` → This help menu"
-        ),
-        inline=False
-    )
-    embed.add_field(
-        name="🔧 Admin Only:",
-        value=(
-            "`!setup #channel` → Change alert channel\n"
-            "`!checknow` → Force check right now\n"
-            "`!clearknown` → Reset known codes list"
-        ),
-        inline=False
-    )
-    embed.add_field(
-        name="⚙️ How it works:",
-        value=(
-            f"✅ Checks every **{CHECK_INTERVAL} minutes**\n"
-            "✅ **Instant alert** for brand new codes\n"
-            f"✅ **Reminder** every {ALERT_INTERVAL_H} hours\n"
-            "✅ Auto creates **#kingshot-codes** channel\n"
-            "✅ Runs **24/7** automatically"
-        ),
-        inline=False
-    )
-    embed.set_footer(text=footer_text())
-    await ctx.send(embed=embed)
+    save_codes_time({})
+    await ctx.send("✅ Known codes and timestamps cleared.")
 
 bot.run(BOT_TOKEN)
