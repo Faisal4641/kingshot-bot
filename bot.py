@@ -420,8 +420,35 @@ async def on_message(message: discord.Message):
             if found - known:
                 record_code_time(found - known)
                 save_known_codes(known | found)
-            embed = build_codes_embed(all_codes, username=name)
-            await message.channel.send(embed=embed)
+
+        if not all_codes:
+            await message.channel.send(
+                f"Hey **{name}**! 😔 No active codes right now.\n"
+                f"🔔 I'll ping you the moment a new code drops!"
+            )
+            return
+
+        # header message
+        await message.channel.send(
+            f"Hey **{name}**! 👋 Found **{len(all_codes)} active code{'s' if len(all_codes) > 1 else ''}** — tap to copy! 👇"
+        )
+
+        # each code as its own separate message for easy copy
+        for code in all_codes:
+            age = get_code_age(code)
+            await message.channel.send(
+                f"```\n{code}\n```"
+                f"⏱ Found: {age}  •  [Redeem here]({REDEEM_URL})"
+            )
+
+        # footer message
+        await message.channel.send(
+            f"📌 **How to redeem:**\n"
+            f"1️⃣ Open Kingshot → tap **Avatar**\n"
+            f"2️⃣ Tap **Gift Code** → paste → **Confirm** ✅\n"
+            f"━━━━━━━━━━━━━━━━━━━━━\n"
+            f"*Powered by DEADPOOL • faysal4641*"
+        )
         return
 
     # ── greeting triggers ──
@@ -510,6 +537,7 @@ async def on_message(message: discord.Message):
 
 @bot.command(name="codes")
 async def cmd_codes(ctx):
+    name = ctx.author.display_name
     async with ctx.typing():
         found = await scrape_all_codes()
         known = load_known_codes()
@@ -517,8 +545,22 @@ async def cmd_codes(ctx):
         if found - known:
             record_code_time(found - known)
             save_known_codes(known | found)
-    embed = build_codes_embed(all_codes, username=ctx.author.display_name)
-    await ctx.send(embed=embed)
+
+    if not all_codes:
+        await ctx.send(f"Hey **{name}**! 😔 No active codes right now. I'll ping when new ones drop!")
+        return
+
+    await ctx.send(f"Hey **{name}**! 👋 Found **{len(all_codes)} active code{'s' if len(all_codes) > 1 else ''}** — tap to copy! 👇")
+    for code in all_codes:
+        age = get_code_age(code)
+        await ctx.send(f"```\n{code}\n```⏱ Found: {age}  •  [Redeem here]({REDEEM_URL})")
+    await ctx.send(
+        f"📌 **How to redeem:**\n"
+        f"1️⃣ Open Kingshot → tap **Avatar**\n"
+        f"2️⃣ Tap **Gift Code** → paste → **Confirm** ✅\n"
+        f"━━━━━━━━━━━━━━━━━━━━━\n"
+        f"*Powered by DEADPOOL • faysal4641*"
+    )
 
 @bot.command(name="setup")
 @commands.has_permissions(administrator=True)
@@ -533,36 +575,4 @@ async def setup(ctx, channel: discord.TextChannel = None):
 
 @bot.command(name="checknow")
 @commands.has_permissions(administrator=True)
-async def check_now(ctx):
-    await ctx.send("🔍 Checking for new codes...")
-    await check_codes()
-    await ctx.send("✅ Done!")
-
-@bot.command(name="status")
-async def status(ctx):
-    server_data = get_server(ctx.guild.id)
-    channel_id = server_data.get("channel_id")
-    last_reminder = server_data.get("last_reminder", "Never")
-    known = load_known_codes()
-    embed = discord.Embed(title="🤖 Kingshot Bot Status", color=BOT_COLOR_BLUE,
-                          timestamp=datetime.now(timezone.utc))
-    if channel_id:
-        ch = ctx.guild.get_channel(int(channel_id))
-        embed.add_field(name="📢 Alert Channel", value=ch.mention if ch else "Not found", inline=True)
-    else:
-        embed.add_field(name="📢 Alert Channel", value="Auto (#kingshot-codes)", inline=True)
-    embed.add_field(name="🔍 Check Every", value=f"{CHECK_INTERVAL} minutes", inline=True)
-    embed.add_field(name="⏰ Reminder Every", value=f"{ALERT_INTERVAL_H} hours", inline=True)
-    embed.add_field(name="🎮 Active Codes", value=str(len(known)), inline=True)
-    embed.add_field(name="📅 Last Reminder", value=last_reminder[:16] if last_reminder != "Never" else "Never", inline=True)
-    embed.set_footer(text=footer())
-    await ctx.send(embed=embed)
-
-@bot.command(name="clearknown")
-@commands.has_permissions(administrator=True)
-async def clear_known(ctx):
-    save_known_codes(set())
-    save_codes_time({})
-    await ctx.send("✅ Known codes and timestamps cleared.")
-
-bot.run(BOT_TOKEN)
+async def
