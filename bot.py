@@ -12,7 +12,7 @@ BOT_TOKEN         = os.getenv("DISCORD_TOKEN")
 CHECK_INTERVAL    = 5       # check every 5 minutes for NEW codes
 ALERT_INTERVAL_H  = 12      # repeat known codes alert every 12 hours
 OWNER_NAME        = "DEADPOOL"
-OWNER_USERNAME    = "faysal4641" #V2
+OWNER_USERNAME    = "faysal4641"
 REDEEM_URL        = "https://kingshot.me/gift-code"
 BOT_COLOR         = 0xFFD700   # gold
 BOT_COLOR_GREEN   = 0x00FF99
@@ -132,8 +132,13 @@ async def scrape_all_codes() -> set:
 
 # ── embeds ────────────────────────────────────
 
+OWNER_DISCORD_ID = "YOUR_DISCORD_ID"   # paste your Discord user ID here
+
 def footer_text():
     return f"Powered by {OWNER_NAME} • {OWNER_USERNAME}"
+
+def owner_credit():
+    return f"Powered by [{OWNER_NAME}](https://discord.com/users/{OWNER_DISCORD_ID}) • {OWNER_USERNAME}"
 
 def build_new_code_embed(new_codes: list) -> discord.Embed:
     embed = discord.Embed(
@@ -157,7 +162,9 @@ def build_new_code_embed(new_codes: list) -> discord.Embed:
 
 def build_all_codes_embed(codes: list) -> discord.Embed:
     if codes:
-        desc = "\n".join(f"```{c}```" for c in codes)
+        # show code in ` ` for easy tap-to-copy on mobile
+        desc = "\n".join(f"📌 `{c}`" for c in codes)
+        desc += "\n\n💡 **Tap a code above to copy it!**"
         title = f"🎮 Kingshot Active Codes ({len(codes)} found)"
     else:
         desc = "❌ No active codes found right now.\nCheck back soon — bot checks every 5 minutes!"
@@ -174,6 +181,7 @@ def build_all_codes_embed(codes: list) -> discord.Embed:
         ),
         inline=False
     )
+    embed.add_field(name="🎖️ Credit", value=owner_credit(), inline=False)
     embed.set_footer(text=footer_text())
     return embed
 
@@ -356,7 +364,7 @@ async def on_message(message: discord.Message):
         return
     content = message.content.strip().lower()
     # respond to natural typing: "codes", "code", "kingshot codes", "gift code"
-    triggers = ["codes", "code", "kingshot code", "kingshot codes", "gift code", "redeem code"]
+    triggers = ["codes", "code", "!code", "!codes", "kingshot code", "kingshot codes", "gift code", "redeem code"]
     if content in triggers:
         ctx = await bot.get_context(message)
         await active_codes(ctx)
